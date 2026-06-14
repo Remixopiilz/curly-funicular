@@ -1,623 +1,251 @@
--- Tokinu flash tp + helper
-local UIS = game:GetService("UserInputService")
-local TeleportService = game:GetService("TeleportService")
+-- LocalScript inside StarterGui -> ScreenGui
+local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local ProximityPromptService = game:GetService("ProximityPromptService")
 local RunService = game:GetService("RunService")
-local player = game.Players.LocalPlayer
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-for _, name in ipairs({"TokinuHelper", "TokinuHub", "TokinuBoosterGUI"}) do
-    local old = playerGui:FindFirstChild(name)
-    if old then old:Destroy() end
-end
+-- Configuration Constants
+local COLORS = {
+    { name = "Add More",   color = Color3.fromRGB(59, 130, 246) },
+    { name = "Big Deal",   color = Color3.fromRGB(234, 179, 8) },
+    { name = "Fair Trade", color = Color3.fromRGB(220, 38, 38) },
+    { name = "Deal?",  color = Color3.fromRGB(34, 197, 94) },
+    { name = "Last Offer", color = Color3.fromRGB(168, 85, 247) },
+    { name = "No Thanks",  color = Color3.fromRGB(249, 115, 22) }
+}
 
-local function makeDraggable(frame)
-    local dragging, dragInput, dragStart, startPos
+local NUM_DICE = 4
+local selectedDice = nil
+local isRolling = false
 
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
+-- UI Layout Definitions (~30% Scaled Down Dimensions)
+local PANEL_HEIGHT = 112
+local DIE_SIZE = 76
+local GAP = 8
+local PAD = 10
+local ZONE_WIDTH = (DIE_SIZE * NUM_DICE) + (GAP * (NUM_DICE - 1)) + (PAD * 2)
 
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
+local BTN_COLS = 3
+local BTN_WIDTH = 84
+local BTN_HEIGHT = 32
+local GAP_X = 6
+local GAP_Y = 6
 
-    frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
-        end
-    end)
+-- Dot Positions for 3D/2D Simulation Matrix
+local DOT_LAYOUT = {
+    [1] = { {0.5, 0.5} },
+    [2] = { {0.28, 0.28}, {0.72, 0.72} },
+    [3] = { {0.28, 0.28}, {0.5, 0.5}, {0.72, 0.72} },
+    [4] = { {0.28, 0.28}, {0.28, 0.72}, {0.72, 0.28}, {0.72, 0.72} },
+    [5] = { {0.28, 0.28}, {0.28, 0.72}, {0.5, 0.5}, {0.72, 0.28}, {0.72, 0.72} },
+    [6] = { {0.28, 0.28}, {0.28, 0.5}, {0.28, 0.72}, {0.72, 0.28}, {0.72, 0.5}, {0.72, 0.72} }
+}
 
-    UIS.InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
+-- Create Screen GUI Core Frame
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "BrainrotDicer"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.IgnoreGuiInset = true
+screenGui.Parent = playerGui
+
+local panel = Instance.new("Frame")
+panel.Name = "MainPanel"
+panel.Size = UDim2.new(0, ZONE_WIDTH, 0, PANEL_HEIGHT)
+panel.Position = UDim2.new(0.5, -ZONE_WIDTH/2, 1, -(PANEL_HEIGHT + 12))
+panel.BackgroundColor3 = Color3.fromRGB(8, 6, 28)
+panel.BackgroundTransparency = 0.1
+panel.BorderSizePixel = 0
+panel.Parent = screenGui
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0, 14)
+uiCorner.Parent = panel
+
+local uiStroke = Instance.new("UIStroke")
+uiStroke.Thickness = 1.5
+uiStroke.Color = Color3.fromRGB(100, 100, 100)
+uiStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+uiStroke.Parent = panel
+
+-- Draggable UI Setup
+local dragging, dragInput, dragStart, startPos
+panel.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = panel.Position
+
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        if dragging then
             local delta = input.Position - dragStart
-            frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
+            panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end
+end)
+
+--- UI Helper Generators
+local function makeVDivider(xPosition)
+    local d = Instance.new("Frame")
+    d.Size = UDim2.new(0, 1, 1, -16)
+    d.Position = UDim2.new(0, xPosition, 0, 8)
+    d.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    d.BorderSizePixel = 0
+    d.Parent = panel
+end
+
+local function clearDots(dieFrame)
+    for _, child in ipairs(dieFrame:GetChildren()) do
+        if child.Name == "Dot" then
+            child:Destroy()
+        end
+    end
+end
+
+local function drawDots(dieFrame, value, color)
+    clearDots(dieFrame)
+    local layout = DOT_LAYOUT[value]
+    if not layout then return end
+
+    -- Calculate luminance to determine adaptive dot color contrast (Black vs White)
+    local luminance = (0.299 * color.R) + (0.587 * color.G) + (0.114 * color.B)
+    local dotColor = luminance > 0.60 and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
+
+    for _, pos in ipairs(layout) do
+        local dot = Instance.new("Frame")
+        dot.Name = "Dot"
+        dot.Size = UDim2.new(0, 13, 0, 13)
+        dot.Position = UDim2.new(pos[1], -6.5, pos[2], -6.5)
+        dot.BackgroundColor3 = dotColor
+        dot.BorderSizePixel = 0
+        dot.Parent = dieFrame
+
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(1, 0)
+        c.Parent = dot
+    end
+end
+
+-- Initialize the Dice Elements
+local diceList = {}
+for i = 1, NUM_DICE do
+    local xPos = PAD + ((i - 1) * (DIE_SIZE + GAP))
+
+    local die = Instance.new("TextButton")
+    die.Name = "Die" .. i
+    die.Size = UDim2.new(0, DIE_SIZE, 0, DIE_SIZE)
+    die.Position = UDim2.new(0, xPos, 0, PAD)
+    die.BackgroundColor3 = COLORS[i].color
+    die.Text = ""
+    die.AutoButtonColor = false
+    die.Parent = panel
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 16)
+    c.Parent = die
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Color = Color3.fromRGB(255,255,255)
+    stroke.Enabled = false
+    stroke.Parent = die
+
+    local valLabel = Instance.new("TextLabel")
+    valLabel.Size = UDim2.new(1, 0, 1, 0)
+    valLabel.BackgroundTransparency = 1
+    valLabel.Text = tostring(i)
+    valLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    valLabel.TextSize = 24
+    valLabel.Font = Enum.Font.GothamBlack
+    valLabel.TextXAlignment = Enum.TextXAlignment.Center
+    valLabel.Parent = die
+
+    diceList[i] = { frame = die, stroke = stroke, label = valLabel, currentVal = i, baseColor = COLORS[i].color }
+    drawDots(die, i, COLORS[i].color)
+
+    -- Selector Logic Click Connections (no outline on select)
+    die.MouseButton1Click:Connect(function()
+        if isRolling then return end
+        if selectedDice == diceList[i] then
+            selectedDice = nil
+        else
+            if selectedDice then selectedDice.stroke.Enabled = false end
+            selectedDice = diceList[i]
+            -- stroke.Enabled = true  ← removed: no white outline shown on click
         end
     end)
 end
 
-local helperGui = Instance.new("ScreenGui")
-helperGui.Name = "TokinuHelper"
-helperGui.ResetOnSpawn = false
-helperGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-helperGui.Parent = playerGui
+-- Status Label Setup
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(0, ZONE_WIDTH, 0, 20)
+statusLabel.Position = UDim2.new(0, 0, 0, PANEL_HEIGHT + 4)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Tap a die to highlight it"
+statusLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
+statusLabel.TextSize = 13
+statusLabel.Font = Enum.Font.SourceSansItalic
+statusLabel.Parent = panel
 
-local helperFrame = Instance.new("Frame")
-helperFrame.Name = "HelperFrame"
-helperFrame.Position = UDim2.new(0, 20, 0.5, -45)
-helperFrame.Size = UDim2.new(0, 160, 0, 90)
-helperFrame.Active = true
-helperFrame.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
-helperFrame.BorderSizePixel = 0
-helperFrame.Parent = helperGui
+-- Roll Action Core Engine Loop
+local function rollDice()
+    if isRolling or not selectedDice then return end
+    isRolling = true
+    statusLabel.Text = "Rolling dynamic probabilities..."
 
-Instance.new("UICorner", helperFrame).CornerRadius = UDim.new(0, 12)
+    local rollDuration = 1.2
+    local startTime = os.clock()
 
-do
-    local s = Instance.new("UIStroke", helperFrame)
-    s.Color = Color3.fromRGB(30, 30, 30)
-    s.Thickness = 1
-end
+    local connection
+    connection = RunService.Heartbeat:Connect(function()
+        local elapsed = os.clock() - startTime
+        if elapsed >= rollDuration then
+            connection:Disconnect()
 
-makeDraggable(helperFrame)
+            -- Set final structured values
+            local finalVal = math.random(1, 6)
+            selectedDice.currentVal = finalVal
+            selectedDice.label.Text = tostring(finalVal)
+            drawDots(selectedDice.frame, finalVal, selectedDice.baseColor)
 
-local helperTitle = Instance.new("TextLabel")
-helperTitle.Name = "HelperTitle"
-helperTitle.Text = "              HELPER"
-helperTitle.Position = UDim2.new(0, 5, 0, 5)
-helperTitle.Size = UDim2.new(1, -10, 0, 25)
-helperTitle.BackgroundTransparency = 1
-helperTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
-helperTitle.TextSize = 14
-helperTitle.Font = Enum.Font.GothamBold
-helperTitle.TextXAlignment = Enum.TextXAlignment.Left
-helperTitle.Parent = helperFrame
-
-local rejoinBtn do
-    rejoinBtn = Instance.new("TextButton")
-    rejoinBtn.Name = "RejoinBtn"
-    rejoinBtn.Text = "REJOIN"
-    rejoinBtn.Position = UDim2.new(0.5, -70, 0, 35)
-    rejoinBtn.Size = UDim2.new(0, 140, 0, 25)
-    rejoinBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-    rejoinBtn.BackgroundTransparency = 0.3
-    rejoinBtn.BorderSizePixel = 0
-    rejoinBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    rejoinBtn.TextSize = 13
-    rejoinBtn.Font = Enum.Font.GothamBold
-    rejoinBtn.Parent = helperFrame
-    Instance.new("UICorner", rejoinBtn).CornerRadius = UDim.new(0, 6)
-end
-
-local kickBtn do
-    kickBtn = Instance.new("TextButton")
-    kickBtn.Name = "KickSelfBtn"
-    kickBtn.Text = "KICK SELF"
-    kickBtn.Position = UDim2.new(0.5, -70, 0, 65)
-    kickBtn.Size = UDim2.new(0, 140, 0, 25)
-    kickBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-    kickBtn.BackgroundTransparency = 0.3
-    kickBtn.BorderSizePixel = 0
-    kickBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    kickBtn.TextSize = 13
-    kickBtn.Font = Enum.Font.GothamBold
-    kickBtn.Parent = helperFrame
-    Instance.new("UICorner", kickBtn).CornerRadius = UDim.new(0, 6)
-end
-
-kickBtn.MouseButton1Click:Connect(function()
-    player:Kick("discord.gg/tokinu")
-end)
-
-rejoinBtn.MouseButton1Click:Connect(function()
-    TeleportService:Teleport(game.PlaceId, player)
-end)
-
-local hubGui = Instance.new("ScreenGui")
-hubGui.Name = "TokinuHub"
-hubGui.ResetOnSpawn = false
-hubGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-hubGui.Parent = playerGui
-
-local mainFrame = Instance.new("Frame")
-mainFrame.Name = "MainFrame"
-mainFrame.Position = UDim2.new(0.5, -447, 0.4, 50)
-mainFrame.Size = UDim2.new(0, 240, 0, 245)
-mainFrame.Active = true
-mainFrame.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
-mainFrame.BorderSizePixel = 0
-mainFrame.ClipsDescendants = true
-mainFrame.Parent = hubGui
-
-makeDraggable(mainFrame)
-
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 12)
-
-do
-    local s = Instance.new("UIStroke", mainFrame)
-    s.Color = Color3.fromRGB(30, 30, 30)
-    s.Thickness = 1
-end
-
-do
-    local header = Instance.new("Frame")
-    header.Name = "Header"
-    header.Position = UDim2.new(0, 0, 0, 0)
-    header.Size = UDim2.new(1, 0, 0, 40)
-    header.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
-    header.BorderSizePixel = 0
-    header.Parent = mainFrame
-    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
-
-    local title = Instance.new("TextLabel")
-    title.Name = "Title"
-    title.Text = "Tokinu"
-    title.Position = UDim2.new(0, 10, 0, 0)
-    title.Size = UDim2.new(1, -20, 1, 0)
-    title.BackgroundTransparency = 1
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.TextSize = 16
-    title.Font = Enum.Font.GothamBold
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = header
-end
-
-local flashBtn do
-    flashBtn = Instance.new("TextButton")
-    flashBtn.Name = "ToggleBtn"
-    flashBtn.Text = "Flash TP: OFF"
-    flashBtn.Position = UDim2.new(0.5, -100, 0, 50)
-    flashBtn.Size = UDim2.new(0, 200, 0, 45)
-    flashBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-    flashBtn.BackgroundTransparency = 0.3
-    flashBtn.BorderSizePixel = 0
-    flashBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    flashBtn.TextSize = 16
-    flashBtn.Font = Enum.Font.GothamBold
-    flashBtn.AutoButtonColor = false
-    flashBtn.Parent = mainFrame
-    Instance.new("UICorner", flashBtn).CornerRadius = UDim.new(0, 8)
-
-    local s = Instance.new("UIStroke", flashBtn)
-    s.Color = Color3.fromRGB(40, 40, 40)
-    s.Thickness = 1
-end
-
-local autoPotionBtn do
-    autoPotionBtn = Instance.new("TextButton")
-    autoPotionBtn.Name = "AutoPotionBtn"
-    autoPotionBtn.Text = "Auto Potion: OFF"
-    autoPotionBtn.Position = UDim2.new(0.5, -100, 0, 100)
-    autoPotionBtn.Size = UDim2.new(0, 200, 0, 45)
-    autoPotionBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-    autoPotionBtn.BackgroundTransparency = 0.3
-    autoPotionBtn.BorderSizePixel = 0
-    autoPotionBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    autoPotionBtn.TextSize = 16
-    autoPotionBtn.Font = Enum.Font.GothamBold
-    autoPotionBtn.AutoButtonColor = false
-    autoPotionBtn.Parent = mainFrame
-    Instance.new("UICorner", autoPotionBtn).CornerRadius = UDim.new(0, 8)
-
-    local s = Instance.new("UIStroke", autoPotionBtn)
-    s.Color = Color3.fromRGB(40, 40, 40)
-    s.Thickness = 1
-end
-
-local sliderZone, pctLabel, sliderBack, sliderFill, sliderDot do
-    sliderZone = Instance.new("Frame")
-    sliderZone.Name = "SliderZone"
-    sliderZone.Position = UDim2.new(0, 10, 1, -85)
-    sliderZone.Size = UDim2.new(1, -20, 0, 80)
-    sliderZone.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-    sliderZone.BackgroundTransparency = 0.2
-    sliderZone.BorderSizePixel = 0
-    sliderZone.ClipsDescendants = true
-    sliderZone.Parent = mainFrame
-    Instance.new("UICorner", sliderZone).CornerRadius = UDim.new(0, 10)
-
-    local label = Instance.new("TextLabel")
-    label.Name = "Label"
-    label.Text = "when to trigger tp:"
-    label.Position = UDim2.new(0, 5, 0, 5)
-    label.Size = UDim2.new(1, -10, 0, 25)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.fromRGB(180, 180, 180)
-    label.TextSize = 12
-    label.Font = Enum.Font.GothamMedium
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = sliderZone
-
-    local pctContainer = Instance.new("Frame")
-    pctContainer.Name = "PercentContainer"
-    pctContainer.Position = UDim2.new(1, -50, 0, 5)
-    pctContainer.Size = UDim2.new(0, 45, 0, 25)
-    pctContainer.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-    pctContainer.BorderSizePixel = 0
-    pctContainer.Parent = sliderZone
-    Instance.new("UICorner", pctContainer).CornerRadius = UDim.new(0, 8)
-
-    pctLabel = Instance.new("TextLabel")
-    pctLabel.Name = "PercentLabel"
-    pctLabel.Text = "90%"
-    pctLabel.Size = UDim2.new(1, 0, 1, 0)
-    pctLabel.BackgroundTransparency = 1
-    pctLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    pctLabel.TextSize = 13
-    pctLabel.Font = Enum.Font.GothamBold
-    pctLabel.Parent = pctContainer
-
-    sliderBack = Instance.new("Frame")
-    sliderBack.Name = "SliderBack"
-    sliderBack.Position = UDim2.new(0.075, 0, 0.7, 0)
-    sliderBack.Size = UDim2.new(0.85, 0, 0, 6)
-    sliderBack.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    sliderBack.BorderSizePixel = 0
-    sliderBack.Parent = sliderZone
-    Instance.new("UICorner", sliderBack).CornerRadius = UDim.new(1, 0)
-
-    sliderFill = Instance.new("Frame")
-    sliderFill.Name = "SliderFill"
-    sliderFill.Size = UDim2.new(0.9, 0, 1, 0)
-    sliderFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    sliderFill.BorderSizePixel = 0
-    sliderFill.Parent = sliderBack
-    Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(1, 0)
-
-    sliderDot = Instance.new("ImageButton")
-    sliderDot.Name = "SliderDot"
-    sliderDot.Image = "rbxassetid://6023426923"
-    sliderDot.ImageTransparency = 0.2
-    sliderDot.Position = UDim2.new(0.9, -10, 0.5, -10)
-    sliderDot.Size = UDim2.new(0, 20, 0, 20)
-    sliderDot.BackgroundTransparency = 1
-    sliderDot.Parent = sliderBack
-end
-
-local flashEnabled = false
-local autoPotionEnabled = false
-local sliderValue = 0.9
-local manualOverride = false
-local triggerBump = false
-local activeTriggers = {}
-
-flashBtn.MouseButton1Click:Connect(function()
-    flashEnabled = not flashEnabled
-    flashBtn.Text = flashEnabled and "Flash TP: ON" or "Flash TP: OFF"
-end)
-
-autoPotionBtn.MouseButton1Click:Connect(function()
-    autoPotionEnabled = not autoPotionEnabled
-    autoPotionBtn.Text = autoPotionEnabled and "Auto Potion: ON" or "Auto Potion: OFF"
-end)
-
-do
-    local sliderDragging = false
-
-    local function updateSlider(inputX)
-        local trackAbsPos = sliderBack.AbsolutePosition.X
-        local trackAbsSize = sliderBack.AbsoluteSize.X
-        local relativeX = math.clamp((inputX - trackAbsPos) / trackAbsSize, 0, 1)
-        manualOverride = true
-        sliderValue = relativeX
-        sliderFill.Size = UDim2.new(relativeX, 0, 1, 0)
-        sliderDot.Position = UDim2.new(relativeX, -10, 0.5, -10)
-        pctLabel.Text = math.floor(relativeX * 100) .. "%"
-    end
-
-    sliderDot.MouseButton1Down:Connect(function()
-        sliderDragging = true
-    end)
-
-    sliderBack.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            sliderDragging = true
-            updateSlider(input.Position.X)
-        end
-    end)
-
-    UIS.InputChanged:Connect(function(input)
-        if sliderDragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch) then
-            updateSlider(input.Position.X)
-        end
-    end)
-
-    UIS.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            sliderDragging = false
+            selectedDice.stroke.Enabled = false
+            selectedDice = nil
+            isRolling = false
+            statusLabel.Text = "Tap a die to highlight it"
+        else
+            -- Rapid random shifting simulation visualizer
+            local rapidRandom = math.random(1, 6)
+            selectedDice.label.Text = tostring(rapidRandom)
+            drawDots(selectedDice.frame, rapidRandom, selectedDice.baseColor)
         end
     end)
 end
 
-local function getPingBase(ping)
-    if ping <= 30 then return 0.91
-    elseif ping <= 70 then return 0.92
-    elseif ping <= 120 then return 0.93
-    else return 0.94 end
-end
+-- Create the Trigger Action Activation Module Button
+local rollButton = Instance.new("TextButton")
+rollButton.Size = UDim2.new(0, 100, 0, 36)
+rollButton.Position = UDim2.new(1, -110, 0, (PANEL_HEIGHT / 2) - 18)
+rollButton.BackgroundColor3 = Color3.fromRGB(16, 185, 129)
+rollButton.Text = "ROLL"
+rollButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+rollButton.Font = Enum.Font.GothamBold
+rollButton.TextSize = 14
+rollButton.Parent = panel
 
-local function updateSliderVisual(v)
-    sliderValue = v
-    sliderFill.Size = UDim2.new(v, 0, 1, 0)
-    sliderDot.Position = UDim2.new(v, -10, 0.5, -10)
-    pctLabel.Text = math.floor(v * 100) .. "%"
-end
+local btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(0, 8)
+btnCorner.Parent = rollButton
 
-RunService.Heartbeat:Connect(function()
-    if not manualOverride then
-        local ping = player:GetNetworkPing() * 1000
-        local base = getPingBase(ping)
-        updateSliderVisual(triggerBump and base + 0.01 or base)
-    end
-end)
-
-ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
-    if not flashEnabled and not autoPotionEnabled then return end
-    if activeTriggers[prompt] then return end
-    activeTriggers[prompt] = true
-    local start = os.clock()
-    local fired = false
-
-    local conn
-    conn = RunService.PreRender:Connect(function()
-        if not prompt or not prompt.Parent then
-            conn:Disconnect()
-            activeTriggers[prompt] = nil
-            return
-        end
-
-        local progress = math.clamp((os.clock() - start) / prompt.HoldDuration, 0, 1)
-
-        if not fired and progress >= sliderValue then
-            fired = true
-            conn:Disconnect()
-            activeTriggers[prompt] = nil
-            triggerBump = not triggerBump
-
-            local char = player.Character
-            if not char then return end
-            local backpack = player:FindFirstChild("Backpack")
-
-            if flashEnabled then
-                local tool = char:FindFirstChildOfClass("Tool")
-                if tool then tool:Activate() end
-            end
-
-            if autoPotionEnabled then
-                local giant = char:FindFirstChild("Giant Potion")
-                    or (backpack and backpack:FindFirstChild("Giant Potion"))
-                if giant then
-                    giant.Parent = char
-                    task.spawn(function() giant:Activate() end)
-                end
-            end
-        end
-    end)
-
-    prompt.PromptButtonHoldEnded:Connect(function()
-        if not fired then
-            conn:Disconnect()
-            activeTriggers[prompt] = nil
-        end
-    end)
-end)
-
-local boosterGui = Instance.new("ScreenGui")
-boosterGui.Name = "TokinuBoosterGUI"
-boosterGui.ResetOnSpawn = false
-boosterGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-boosterGui.Parent = playerGui
-
-local speedMain = Instance.new("Frame")
-speedMain.Name = "SpeedMain"
-speedMain.Position = UDim2.new(1, -175, 0.29, 0)
-speedMain.Size = UDim2.new(0, 160, 0, 110)
-speedMain.Active = true
-speedMain.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
-speedMain.BorderSizePixel = 0
-speedMain.Parent = boosterGui
-
-Instance.new("UICorner", speedMain).CornerRadius = UDim.new(0, 12)
-
-do
-    local s = Instance.new("UIStroke", speedMain)
-    s.Color = Color3.fromRGB(30, 30, 30)
-    s.Thickness = 1
-end
-
-makeDraggable(speedMain)
-
-do
-    local title = Instance.new("TextLabel")
-    title.Name = "SpeedTitle"
-    title.Text = "      Speed Booster"
-    title.Position = UDim2.new(0, 5, 0, 5)
-    title.Size = UDim2.new(1, -10, 0, 30)
-    title.BackgroundTransparency = 1
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.TextSize = 14
-    title.Font = Enum.Font.GothamBold
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = speedMain
-end
-
-local speedBox do
-    local container = Instance.new("Frame")
-    container.Name = "SpeedBoxContainer"
-    container.Position = UDim2.new(0, 10, 0, 35)
-    container.Size = UDim2.new(1, -20, 0, 35)
-    container.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
-    container.BorderSizePixel = 0
-    container.Parent = speedMain
-    Instance.new("UICorner", container).CornerRadius = UDim.new(0, 8)
-
-    speedBox = Instance.new("TextBox")
-    speedBox.Name = "SpeedBox"
-    speedBox.Text = "27"
-    speedBox.PlaceholderText = "Speed"
-    speedBox.PlaceholderColor3 = Color3.fromRGB(80, 80, 80)
-    speedBox.Position = UDim2.new(0, 5, 0, 0)
-    speedBox.Size = UDim2.new(1, -10, 1, 0)
-    speedBox.BackgroundTransparency = 1
-    speedBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-    speedBox.TextSize = 16
-    speedBox.Font = Enum.Font.GothamBold
-    speedBox.ClearTextOnFocus = false
-    speedBox.Parent = container
-end
-
-local speedToggle, toggleKnob do
-    speedToggle = Instance.new("Frame")
-    speedToggle.Name = "SpeedToggle"
-    speedToggle.Position = UDim2.new(0.5, -30, 1, -35)
-    speedToggle.Size = UDim2.new(0, 60, 0, 26)
-    speedToggle.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    speedToggle.BorderSizePixel = 0
-    speedToggle.Parent = speedMain
-    Instance.new("UICorner", speedToggle).CornerRadius = UDim.new(1, 0)
-
-    toggleKnob = Instance.new("ImageButton")
-    toggleKnob.Name = "ToggleKnob"
-    toggleKnob.Image = "rbxassetid://6023426923"
-    toggleKnob.ImageTransparency = 0.2
-    toggleKnob.Position = UDim2.new(0, 2, 0.5, -11)
-    toggleKnob.Size = UDim2.new(0, 22, 0, 22)
-    toggleKnob.BackgroundTransparency = 1
-    toggleKnob.Parent = speedToggle
-end
-
-local MAX_SPEED = 100
-local boostEnabled = false
-local boostConn = nil
-local currentSpeed = 27
-
-local function setToggleVisual(on)
-    local goalPos = on
-        and UDim2.new(1, -24, 0.5, -11)
-        or  UDim2.new(0, 2, 0.5, -11)
-
-    TweenService:Create(toggleKnob, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-        Position = goalPos
-    }):Play()
-end
-
-local function toggleBoost()
-    boostEnabled = not boostEnabled
-    setToggleVisual(boostEnabled)
-
-    if boostEnabled then
-        currentSpeed = math.clamp(tonumber(speedBox.Text) or 1, 1, MAX_SPEED)
-
-        if boostConn then boostConn:Disconnect() end
-        boostConn = RunService.Heartbeat:Connect(function()
-            if not player.Character then return end
-            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-            if not hrp or not humanoid then return end
-
-            local moveDir = humanoid.MoveDirection
-            if moveDir.Magnitude > 0 then
-                local flatDir = Vector3.new(moveDir.X, 0, moveDir.Z).Unit
-                hrp.Velocity = Vector3.new(
-                    flatDir.X * currentSpeed,
-                    hrp.Velocity.Y,
-                    flatDir.Z * currentSpeed
-                )
-            end
-        end)
-    else
-        if boostConn then
-            boostConn:Disconnect()
-            boostConn = nil
-        end
-    end
-end
-
-toggleKnob.MouseButton1Click:Connect(toggleBoost)
-
-speedBox.FocusLost:Connect(function()
-    local num = tonumber(speedBox.Text)
-    if not num or num < 1 then
-        num = 1
-    elseif num > MAX_SPEED then
-        num = MAX_SPEED
-    end
-    num = math.floor(num)
-    speedBox.Text = tostring(num)
-    currentSpeed = num
-end)
-
-player.CharacterAdded:Connect(function()
-    if boostEnabled then
-        task.wait(0.3)
-        currentSpeed = math.clamp(tonumber(speedBox.Text) or 1, 1, MAX_SPEED)
-    end
-end)
-
-do
-    local STEAL_KEYWORD = "you stole"
-    local STEAL_KICK_MSG = "Tokinu"
-
-    local function hasStealText(text)
-        if typeof(text) ~= "string" then return false end
-        return string.find(string.lower(text), STEAL_KEYWORD) ~= nil
-    end
-
-    local function kickOnSteal()
-        pcall(function()
-            player:Kick(STEAL_KICK_MSG)
-        end)
-    end
-
-    local function watchObject(obj)
-        if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-            if hasStealText(obj.Text) then
-                kickOnSteal()
-                return
-            end
-            obj:GetPropertyChangedSignal("Text"):Connect(function()
-                if hasStealText(obj.Text) then
-                    kickOnSteal()
-                end
-            end)
-        end
-    end
-
-    local function setupGuiWatcher(gui)
-        gui.DescendantAdded:Connect(function(desc)
-            watchObject(desc)
-        end)
-    end
-
-    local function scanAll(parent)
-        for _, obj in ipairs(parent:GetDescendants()) do
-            watchObject(obj)
-        end
-    end
-
-    for _, gui in ipairs(playerGui:GetChildren()) do
-        setupGuiWatcher(gui)
-    end
-
-    playerGui.ChildAdded:Connect(function(gui)
-        setupGuiWatcher(gui)
-        scanAll(gui)
-    end)
-
-    scanAll(playerGui)
-end
+rollButton.MouseButton1Click:Connect(rollDice)
